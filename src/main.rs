@@ -1,12 +1,11 @@
 use harper_core::Document;
 use harper_core::linting::*;
-use harper_core::parsers::PlainEnglish;
 use harper_core::spell::FstDictionary;
 use regex::Regex;
 use std::io;
+use std::io::Read;
 use std::sync::Arc;
 use std::thread;
-use std::thread::Thread;
 #[derive(Copy, Clone)]
 struct Grade {
     val: Option<f32>,
@@ -47,31 +46,8 @@ enum LintCategory {
     Punctuation,
     Spelling,
     Capitalization,
-    Other,
 }
 
-fn categorize_linter<T: ?Sized + 'static>(_: &T) -> LintCategory {
-    let type_name = std::any::type_name::<T>();
-
-    match type_name {
-        // punctuation-related
-        "harper_core::linting::CommaFixes"
-        | "harper_core::linting::CompoundNouns"
-        | "harper_core::linting::CorrectNumberSuffix" => LintCategory::Punctuation,
-
-        // spelling-related
-        "harper_core::linting::AdjectiveOfA" | "harper_core::linting::AnA" => {
-            LintCategory::Spelling
-        }
-
-        // capitalization-related
-        "harper_core::linting::CapitalizePersonalPronouns"
-        | "harper_core::linting::CapitalizeStartOfSentence" => LintCategory::Capitalization,
-
-        // default catch-all
-        _ => LintCategory::Other,
-    }
-}
 fn bucket_lints(text: &str) -> Vec<LintCategory> {
     let doc: Document = Document::new_plain_english_curated(text);
     let mut linter: LintGroup = LintGroup::default();
@@ -171,7 +147,6 @@ impl Rubric {
                     LintCategory::Punctuation => punc.fail(),
                     LintCategory::Spelling => spel.fail(),
                     LintCategory::Capitalization => caps.fail(),
-                    LintCategory::Other => continue,
                 }
             }
             punc.pass();
@@ -233,11 +208,14 @@ impl Rubric {
             self.ques.get() * 20.0
         )
         .to_string();
-        out += &"=== === === === === === === === ===\n".to_string();
+        out += &"#== === === === =#= === === === ==#\n".to_string();
         out += &format!("{}%(100%): Final score\n", (score * 100.0).round()).to_string();
         out
     }
 }
 fn main() {
-    println!("{}", Rubric::from_string("".to_string()).output());
+    let mut f = std::fs::File::open(std::path::Path::new("input.txt")).unwrap();
+    let mut contents = String::new();
+    f.read_to_string(&mut contents).unwrap();
+    println!("{}", Rubric::from_string(contents).output());
 }
