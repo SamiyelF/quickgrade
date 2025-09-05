@@ -1,9 +1,8 @@
 [package]
-name = "quickwrite"
+name = "quickgrade"
 version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-harper-core = "0.59.0"
-ratatui = "0.28.0"
 regex = "1.11.2"
+harper-core = "0.59"

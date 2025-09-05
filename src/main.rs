@@ -1,12 +1,13 @@
 use harper_core::Document;
+use harper_core::Span;
 use harper_core::linting::*;
 use harper_core::spell::FstDictionary;
 use regex::Regex;
 use std::io;
 use std::io::Read;
 use std::sync::Arc;
-use std::thread;
-#[derive(Copy, Clone)]
+
+#[derive(Copy, Clone, Debug, Default)]
 struct Grade {
     val: Option<bool>,
 }
@@ -39,8 +40,11 @@ impl Grade {
         Grade { val: Some(v) }
     }
 }
+
+#[derive(Default, Debug)]
 enum LintCategory {
     Punctuation,
+    #[default]
     Spelling,
     Capitalization,
 }
@@ -85,13 +89,55 @@ fn bucket_lints(text: &str) -> Vec<LintCategory> {
         "SentenceCapitalization",
         SentenceCapitalization::new(dict.clone()),
     );
+    struct Samslint;
+    impl Linter for Samslint {
+        fn lint(&mut self, document: &Document) -> Vec<Lint> {
+            let mut lints = Vec::new();
+            let text = document.get_full_string();
+            let mut i = 0;
+            for line in text.lines() {
+                if !line.trim().ends_with(|c| c == '!' || c == '.' || c == '?')
+                    && !Rubric::contains_link(&line.to_string())
+                    && !line.trim().is_empty()
+                {
+                    let lint = Lint {
+                        span: Span::new(i, i + line.len()),
+                        lint_kind: LintKind::Punctuation,
+                        suggestions: vec![Suggestion::InsertAfter(vec!['.'])],
+                        message: "Missing period at end of sentence".to_string(),
+                        priority: 0,
+                    };
+                    lints.push(lint);
+                }
+                i += line.len();
+            }
+            lints
+        }
 
+        fn description(&self) -> &str {
+            "Check if line ends with punctuation"
+        }
+    }
+    linter.add("Sams Lint", Samslint);
     linter.set_all_rules_to(Some(true));
     let lints = linter.lint(&doc);
     let mut buckets: Vec<LintCategory> = Vec::new();
+    let v: Vec<char> = text.chars().collect();
     for error in lints {
+        println!(
+            "\t'{}': {}",
+            error
+                .span
+                .get_content_string({
+                    let cs: &[char] = &v;
+                    cs
+                })
+                .trim()
+                .to_string(),
+            error.message
+        );
         let error = error.lint_kind;
-        buckets.push(match error {
+        let cat = match error {
             LintKind::BoundaryError => LintCategory::Spelling,
             LintKind::Capitalization => LintCategory::Capitalization,
             LintKind::Eggcorn => LintCategory::Spelling,
@@ -100,10 +146,13 @@ fn bucket_lints(text: &str) -> Vec<LintCategory> {
             LintKind::Spelling => LintCategory::Spelling,
             LintKind::Typo => LintCategory::Spelling,
             _ => continue,
-        })
+        };
+        buckets.push(cat)
     }
     buckets
 }
+
+#[derive(Default, Debug, Copy, Clone)]
 struct Rubric {
     link: Grade,
     caps: Grade,
@@ -129,34 +178,38 @@ impl Rubric {
             ques: Grade::empty(),
         }
     }
-    fn from_string(contents: String) -> Rubric {
-        fn punc_spell_caps(contents: &String) -> (bool, bool, bool) {
-            let lints = bucket_lints(contents);
-            let mut punc = Grade::empty();
-            let mut spel = Grade::empty();
-            let mut caps = Grade::empty();
-            for lint in lints {
-                match lint {
-                    LintCategory::Punctuation => punc.fail(),
-                    LintCategory::Spelling => spel.fail(),
-                    LintCategory::Capitalization => caps.fail(),
-                }
+    fn punc_spell_caps(contents: &String) -> (bool, bool, bool) {
+        let lints = bucket_lints(contents);
+        let mut punc = Grade::empty();
+        let mut spel = Grade::empty();
+        let mut caps = Grade::empty();
+        for lint in lints {
+            match lint {
+                LintCategory::Punctuation => punc.fail(),
+                LintCategory::Spelling => spel.fail(),
+                LintCategory::Capitalization => caps.fail(),
             }
-            punc.pass();
-            spel.pass();
-            caps.pass();
-            return (punc.get(), spel.get(), caps.get());
         }
-        fn contains_link(contents: &String) -> bool {
-            let regex = Regex::new(r"((youtube.com)|(youtu.be)|(tiktok.com))\/").unwrap();
-            regex.is_match(contents)
-        }
-
+        punc.pass();
+        spel.pass();
+        caps.pass();
+        (punc.get(), spel.get(), caps.get())
+    }
+    fn contains_good_link(contents: &String) -> bool {
+        let regex =
+            Regex::new(r"((youtube.com)|(youtu.be)|(tiktok.com)|(youtubeeducation.com))/").unwrap();
+        regex.is_match(contents) && Rubric::contains_link(contents)
+    }
+    fn contains_link(contents: &String) -> bool {
+        let regex = Regex::new(r"https?:\/\/(www\.)?[-a-zA-Z0-9@:%._\+~#=]{1,256}\.[a-zA-Z0-9()]{1,6}\b([-a-zA-Z0-9()@:%_\+.~#?&//=]*)").unwrap();
+        regex.is_match(contents)
+    }
+    fn from_string(mut contents: String) -> Rubric {
         let mut out = Rubric::new();
+        contents = contents.chars().filter(|c| *c != '’').collect(); // that char panics lord knows why
         let contents_clone = contents.clone();
-        let handle = thread::spawn(move || punc_spell_caps(&contents_clone));
-        out.link = Grade::new(contains_link(&contents));
-        println!("{}", contents);
+        let handle = std::thread::spawn(move || Rubric::punc_spell_caps(&contents_clone));
+        out.link = Grade::new(Rubric::contains_good_link(&contents));
         println!("Complete sentences and all questions answered?");
         let mut input = String::new();
         io::stdin()
@@ -173,7 +226,7 @@ impl Rubric {
         out.punc = Grade::new(psc.0);
         out.spel = Grade::new(psc.1);
         out.caps = Grade::new(psc.2);
-        return out;
+        out
     }
     fn output(&mut self) -> String {
         let score = self.get();
@@ -181,8 +234,7 @@ impl Rubric {
         out += &format!(
             "{}%(20%): Contains a link to a youtube video\n",
             self.link.perc() * 20.0
-        )
-        .to_string();
+        );
         out += &format!("{}%(20%): No spelling mistakes\n", self.spel.perc() * 20.0);
         out += &format!(
             "{}%(20%): No punctuation mistakes\n",
@@ -191,15 +243,13 @@ impl Rubric {
         out += &format!(
             "{}%(20%): No capitalization mistakes\n",
             self.caps.perc() * 20.0
-        )
-        .to_string();
+        );
         out += &format!(
             "{}%(20%): Answered all the questions in complete sentences\n",
             self.ques.perc() * 20.0
-        )
-        .to_string();
+        );
         out += &"#== === === === =#= === === === ==#\n".to_string();
-        out += &format!("{}%(100%): Final score\n", (score * 100.0).round()).to_string();
+        out += &format!("{}%(100%): Final score\n", (score * 100.0).round());
         out
     }
 }
